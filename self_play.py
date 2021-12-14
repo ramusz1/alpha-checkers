@@ -1,6 +1,6 @@
 #based on https://web.stanford.edu/~surag/posts/alphazero.html
 from state import State
-from nnet import NNet
+from nnet import NNet, RandomPlayer
 from training_example import TrainingExample
 from mcts import MCTS
 
@@ -9,7 +9,7 @@ from pettingzoo.utils.env import AECEnv
 from copy import deepcopy
 import numpy as np
 
-def pit(new_nnet : NNet, nnet : NNet, games_played = 10):
+def pit(new_nnet : NNet, nnet : NNet, games_played = 40):
     new_nnet_tag = "player_0"
     nnet_tag = "player_1"
     wins = 0
@@ -43,35 +43,39 @@ def pit(new_nnet : NNet, nnet : NNet, games_played = 10):
     return frac_win
 
 # training
-def policyIterSP(env : AECEnv, num_iters = 1, num_eps = 1, frac_win_thresh = 0.55):
+def policyIterSP(env : AECEnv, num_iters = 10, num_eps = 10,  num_mcts_sims=25, frac_win_thresh = 0.55):
     # hard coded action space size
     nnet = NNet(256)
+    frac_win = pit(nnet, RandomPlayer())                              # compare new net with a random player
+    print("frac_wins against a random player", frac_win)
     examples = []
     for i in range(num_iters):
         for e in range(num_eps):
-            examples += executeSelfPlayEpisode(env, nnet)           # collect examples from this game
+            examples += executeSelfPlayEpisode(env, nnet, num_mcts_sims)    # collect examples from this game
             print("episode done")
         new_nnet = nnet.train(examples)
-        frac_win = pit(new_nnet, nnet)                      # compare new net with previous net
+        frac_win = pit(new_nnet, nnet)                                # compare new net with previous net
         print("frac_win", frac_win)
         if frac_win > frac_win_thresh:
             print("new net is better!")
-            nnet = new_nnet                                 # replace with new net
+            nnet = new_nnet                                           # replace with new net
+            frac_win = pit(nnet, RandomPlayer())                      # compare new net with a random player
+            print("frac_wins against a random player", frac_win)
+        examples = random.sample(examples, len(examples) // 2)        # discard half of the examples
     return nnet
 
-def executeSelfPlayEpisode(env : AECEnv, nnet, num_mcts_sims = 2):
+def executeSelfPlayEpisode(env : AECEnv, nnet, num_mcts_sims = 3):
     examples = []
     env.reset()
     s = State(env)
     # s.show(wait = False)
-    mcts = MCTS(nnet)                                           # initialise search tree
+    mcts = MCTS(nnet, num_mcts_sims)
 
     while True:
-        for _ in range(num_mcts_sims):
-            mcts.search(s)
+        mcts.search(s)
         pi = mcts.pi(s)
-        examples.append(TrainingExample(deepcopy(s), pi, None))              # rewards can not be determined yet
-        a = np.random.choice(len(pi), p=pi)    # sample action from improved policy
+        examples.append(TrainingExample(deepcopy(s), pi, None))  # rewards can not be determined yet
+        a = np.random.choice(len(pi), p=pi)                      # sample action from improved policy
         s, _ = s.nextState(a)
         # s.show(wait = False)
         if s.gameEnded():
@@ -84,6 +88,23 @@ def assignRewards(examples, reward, player_w_reward):
 
     return examples
 
+
 if __name__ == "__main__":
-    env = checkers_v3.env()
-    policyIterSP(env)
+    import argparse
+    parser = argparse.ArgumentParser(description="train checkers ai")
+    parser.add_argument("--test", action="store_true", help="run short test")
+    args = parser.parse_args()
+    if args.test:
+        print(
+            '''
+####################
+running test version
+####################
+            '''
+        )
+        env = checkers_v3.env()
+        nnet = policyIterSP(env, num_iters=1, num_eps=1, num_mcts_sims=3)
+    else:
+        env = checkers_v3.env()
+        nnet = policyIterSP(env, num_iters=8, num_eps=50, num_mcts_sims=25)
+
